@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cómo el algoritmo encuentra los pesos — Control Sintético</title>
+<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Crimson Pro', Georgia, serif; background: #0B1120; color: #C8D6E5; min-height: 100vh; display: flex; flex-direction: column; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.loop-label { font-family: 'JetBrains Mono', monospace; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
+
+.fade-in { opacity: 0; transform: translateY(12px); animation: fadeUp 0.6s ease forwards; }
+@keyframes fadeUp { to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+@keyframes slideBar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.bar-anim { transform-origin: left; animation: slideBar 0.8s ease forwards; }
+@keyframes traceIn { from { stroke-dashoffset: 1000; } to { stroke-dashoffset: 0; } }
+@keyframes popIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.pop-in { animation: popIn 0.5s ease forwards; }
+
+.step-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #2A3F5F; transition: all 0.3s; cursor: pointer; display: inline-block; }
+.step-dot.active { background: #E8A317; border-color: #E8A317; transform: scale(1.3); }
+.step-dot.done { background: #1B6B93; border-color: #1B6B93; }
+
+.btn { padding: 10px 24px; border: 1px solid #2A3F5F; background: transparent; color: #8899AA; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 15px; transition: all 0.2s; }
+.btn:hover { border-color: #4FC3A1; color: #4FC3A1; }
+.btn.primary { background: #1B6B93; border-color: #1B6B93; color: #fff; }
+.btn.primary:hover { background: #2280AB; }
+
+.header { padding: 28px 36px 18px; border-bottom: 1px solid #1A2744; }
+.header h1 { font-size: 30px; font-weight: 600; color: #F0F4F8; letter-spacing: -0.5px; display: inline; }
+.iter-label { font-size: 16px; color: #E8A317; opacity: 0.8; margin-left: 16px; }
+.dots-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+.dot-sep { width: 28px; height: 1px; display: inline-block; }
+
+.main { flex: 1; display: flex; padding: 24px 36px; gap: 32px; overflow: hidden; }
+.left { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 18px; }
+.right { flex: 1; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.top-row { display: flex; gap: 16px; flex: 0 0 auto; }
+.bottom-row { flex: 1; display: flex; gap: 16px; min-height: 0; }
+
+.panel { background: #0F1B2D; border-radius: 6px; padding: 16px 18px; transition: border-color 0.5s, opacity 0.5s; }
+.panel.dim { opacity: 0.4; }
+
+.bar-row { display: flex; align-items: center; gap: 10px; }
+.bar-track { flex: 1; height: 20px; background: #162840; border-radius: 3px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease, background 0.3s; }
+.bar-track.sm { height: 18px; }
+.bar-track.xs { height: 16px; }
+
+.step-title { font-size: 14px; color: #4FC3A1; letter-spacing: 2px; margin-bottom: 8px; }
+.step-desc { font-size: 21px; color: #E2E8F0; line-height: 1.5; margin-bottom: 14px; }
+.step-detail { font-size: 17px; color: #6B7D95; line-height: 1.6; font-style: italic; }
+
+.legend { display: flex; align-items: center; gap: 16px; padding: 10px 0 0; border-top: 1px solid #1A2744; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-line { width: 24px; height: 2px; }
+
+.btn-row { margin-top: auto; display: flex; gap: 10px; }
+
+/* Distance calc panel */
+.dist-table { width: 100%; border-collapse: collapse; }
+.dist-table th { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6B7D95; text-align: center; padding: 4px 6px; border-bottom: 1px solid #1A2744; letter-spacing: 1px; text-transform: uppercase; }
+.dist-table td { font-family: 'JetBrains Mono', monospace; font-size: 13px; text-align: center; padding: 6px 6px; border-bottom: 1px solid #0B1120; }
+.dist-table tr:last-child td { border-bottom: none; }
+.dist-total-row td { border-top: 2px solid #2A3F5F; font-weight: 500; padding-top: 8px; }
+.gap-bar-container { width: 100%; height: 10px; background: #162840; border-radius: 2px; overflow: hidden; }
+.gap-bar { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Cómo el algoritmo encuentra los pesos</h1>
+    <span id="iterLabel" class="mono iter-label" style="display:none;"></span>
+  </div>
+  <div class="dots-row" id="dotsRow"></div>
+</div>
+
+<div class="main">
+  <div class="left">
+    <div id="textPanel">
+      <div id="stepTitle" class="mono step-title"></div>
+      <p id="stepDesc" class="step-desc"></p>
+      <p id="stepDetail" class="step-detail"></p>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btnPrev" onclick="goPrev()">← Atrás</button>
+      <button class="btn primary" id="btnNext" onclick="goNext()">Siguiente →</button>
+      <button class="btn" onclick="reset()" style="margin-left:auto">Reiniciar</button>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="top-row">
+      <div id="panelV" class="panel" style="flex:1; border: 1.5px dashed #1A2744;">
+        <div class="loop-label" style="color:#1B6B93; margin-bottom:12px;">
+          V — Pesos de predictores <span id="pulseV" style="display:none; animation: pulse 1.5s infinite;">●</span>
+        </div>
+        <div id="vBars"></div>
+      </div>
+      <div id="panelW" class="panel" style="flex:1; border: 1.5px dashed #1A2744;">
+        <div class="loop-label" style="color:#E8A317; margin-bottom:12px;">
+          W — Pesos de donantes <span id="pulseW" style="display:none; animation: pulse 1.5s infinite;">●</span>
+        </div>
+        <div id="wBars"></div>
+      </div>
+    </div>
+
+    <div class="bottom-row">
+      <!-- Distance calc panel (visible at step 2) -->
+      <div id="panelDist" class="panel" style="flex:1; display:none; flex-direction:column; border: 1.5px solid #E8A317;">
+        <div class="loop-label" style="color:#E8A317; margin-bottom:10px;">
+          Cálculo de distancia ponderada
+        </div>
+        <div style="flex:1; overflow:auto;">
+          <table class="dist-table" id="distTable"></table>
+        </div>
+        <div id="distFormula" class="mono" style="font-size:12px; color:#6B7D95; margin-top:10px; padding-top:8px; border-top:1px solid #1A2744;"></div>
+      </div>
+
+      <!-- Chart panel (hidden at step 2) -->
+      <div id="panelChart" class="panel" style="flex:1; display:flex; flex-direction:column; border: 1.5px dashed #1A2744;">
+        <div class="loop-label" style="color:#4FC3A1; margin-bottom:10px;">
+          Ajuste pre-tratamiento <span id="pulseChart" style="display:none; animation: pulse 1.5s infinite;">●</span>
+        </div>
+        <div style="flex:1; position:relative; min-height:120px;">
+          <svg id="chartSvg" viewBox="0 0 400 180" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+      </div>
+
+      <div id="panelMSPE" class="panel" style="width:190px; display:flex; flex-direction:column; border: 1.5px dashed #1A2744;">
+        <div class="loop-label" style="color:#6B7D95; margin-bottom:14px;">ECMP</div>
+        <div id="mspeBars" style="display:flex; flex-direction:column; gap:6px; flex:1;"></div>
+        <div id="mspeStatus" style="margin-top:14px; border-top:1px solid #1A2744; padding-top:10px; display:none;">
+          <div class="mono" style="font-size:13px; color:#6B7D95;" id="mspeText"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-line" style="border:1px dashed #1B6B93;"></div><span class="mono" style="font-size:13px; color:#1B6B93;">Bucle externo (V)</span></div>
+      <div class="legend-item"><div class="legend-line" style="border:1px solid #E8A317;"></div><span class="mono" style="font-size:13px; color:#E8A317;">Bucle interno (W)</span></div>
+      <div class="legend-item"><div class="legend-line" style="background:#4FC3A1;"></div><span class="mono" style="font-size:13px; color:#4FC3A1;">Evaluación</span></div>
+      <span class="mono" style="font-size:13px; color:#4A5568; margin-left:auto;">Abadie y Gardeazabal (2003)</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const STEPS = [
+  { title: "EL PROBLEMA", desc: "Necesitamos dos conjuntos de pesos para construir una unidad de control sintético. Pero dependen el uno del otro.", detail: "Los pesos de los predictores (V) determinan la importancia de cada característica. Los pesos de los donantes (W) determinan cuánto contribuye cada región de control. El algoritmo debe resolver ambos simultáneamente." },
+  { title: "PASO 1: INICIALIZAR V", desc: "Asignar puntuaciones iniciales de importancia a cada variable predictora.", detail: "Pueden ser pesos iguales (1/k para k predictores), valores iniciales basados en regresión, o incluso elecciones subjetivas. Lo clave: son solo un punto de partida — el algoritmo los refinará." },
+  { title: "PASO 2: ENCONTRAR W DADO V", desc: "Dado V, encontrar la combinación de donantes que minimice la distancia ponderada a la unidad tratada.", detail: "Para cada predictor, se calcula la brecha entre la unidad tratada y el promedio ponderado de los donantes, se eleva al cuadrado y se multiplica por la importancia V del predictor. Se busca el W que minimiza la suma total. Esto es un problema de programación cuadrática con solución única." },
+  { title: "PASO 3: EVALUAR EL AJUSTE", desc: "¿Qué tan bien replica esta unidad sintética a la real antes del evento?", detail: "Aplicar los pesos W a los resultados pre-tratamiento de los donantes (ej. PIB per cápita). Calcular el Error Cuadrático Medio de Predicción (ECMP) — la brecha cuadrática promedio entre las trayectorias sintética y real antes del tratamiento." },
+  { title: "PASO 4: ACTUALIZAR V", desc: "Ajustar las puntuaciones de importancia de los predictores para mejorar el ajuste pre-tratamiento.", detail: "Si el ajuste es deficiente, desplazar importancia hacia los predictores que ayudan a la unidad sintética a seguir los resultados de la unidad tratada. Luego volver al Paso 2 con el V actualizado y encontrar un nuevo W." },
+  { title: "CONVERGENCIA", desc: "Cuando el ECMP deja de mejorar, tenemos nuestra respuesta.", detail: "El algoritmo ha encontrado V* (pesos óptimos de predictores) y W* (pesos óptimos de donantes). Estos W* definen el control sintético — una combinación ponderada de regiones donantes que mejor aproxima la unidad tratada antes de la intervención." }
+];
+
+const PREDICTORS = [
+  { name: "Inversión", short: "Inv" },
+  { name: "Educación", short: "Edu" },
+  { name: "Industria", short: "Ind" },
+  { name: "Densidad", short: "Den" },
+];
+
+const REGIONS = [
+  { name: "Cataluña", color: "#E8A317" },
+  { name: "Madrid", color: "#1B6B93" },
+  { name: "Andalucía", color: "#4A5568" },
+  { name: "Galicia", color: "#4A5568" },
+  { name: "Valencia", color: "#4A5568" },
+  { name: "Castilla", color: "#4A5568" },
+];
+
+// Predictor values: treated (Basque) and per-region
+const TREATED_X = [24.5, 72.0, 45.2, 280];  // Inv, Edu, Ind, Den
+const DONOR_X = [
+  [23.0, 68.0, 43.0, 260],  // Cataluña
+  [22.0, 65.0, 38.0, 310],  // Madrid
+  [18.0, 55.0, 30.0, 100],  // Andalucía
+  [16.0, 58.0, 28.0, 95],   // Galicia
+  [20.0, 60.0, 35.0, 180],  // Valencia
+  [15.0, 52.0, 25.0, 70],   // Castilla
+];
+
+const ITERS = [
+  { v: [0.25, 0.25, 0.25, 0.25], w: [0.30, 0.25, 0.15, 0.15, 0.10, 0.05], mspe: 4200 },
+  { v: [0.20, 0.30, 0.30, 0.20], w: [0.50, 0.20, 0.10, 0.10, 0.05, 0.05], mspe: 2100 },
+  { v: [0.15, 0.25, 0.35, 0.25], w: [0.65, 0.18, 0.07, 0.05, 0.03, 0.02], mspe: 980 },
+  { v: [0.12, 0.22, 0.38, 0.28], w: [0.78, 0.15, 0.03, 0.02, 0.01, 0.01], mspe: 420 },
+  { v: [0.10, 0.20, 0.40, 0.30], w: [0.85, 0.15, 0.00, 0.00, 0.00, 0.00], mspe: 180 },
+];
+
+const BASQUE_GDP = [4.2, 5.1, 6.0, 6.8, 7.2, 6.9, 6.5, 6.8, 7.1, 7.4];
+const SYN_PATHS = [
+  [4.0, 4.8, 5.5, 6.2, 6.8, 7.5, 7.8, 8.1, 8.5, 8.9],
+  [4.1, 4.9, 5.7, 6.5, 7.0, 7.3, 7.6, 7.9, 8.2, 8.5],
+  [4.15, 5.0, 5.85, 6.7, 7.15, 7.2, 7.5, 7.8, 8.0, 8.3],
+  [4.18, 5.05, 5.92, 6.75, 7.18, 7.15, 7.4, 7.7, 7.9, 8.2],
+  [4.2, 5.08, 5.98, 6.78, 7.19, 7.1, 7.3, 7.6, 7.8, 8.1],
+];
+const TRT_IDX = 5;
+
+let step = 0, iteration = 0;
+
+function computeSynthetic(w) {
+  return PREDICTORS.map((_, k) => {
+    let sum = 0;
+    for (let j = 0; j < REGIONS.length; j++) sum += w[j] * DONOR_X[j][k];
+    return sum;
+  });
+}
+
+function computeDistances(v, w) {
+  const synth = computeSynthetic(w);
+  return PREDICTORS.map((_, k) => {
+    const gap = TREATED_X[k] - synth[k];
+    return { treated: TREATED_X[k], synth: synth[k], gap, gapSq: gap * gap, weighted: v[k] * gap * gap };
+  });
+}
+
+function renderDistTable(v, w) {
+  const dists = computeDistances(v, w);
+  const synth = computeSynthetic(w);
+  const totalWeighted = dists.reduce((s, d) => s + d.weighted, 0);
+  const maxWeighted = Math.max(...dists.map(d => d.weighted), 1);
+
+  let html = `<tr>
+    <th style="text-align:left;">Predictor</th>
+    <th>vₖ</th>
+    <th>Tratado</th>
+    <th>Sintético</th>
+    <th>Brecha</th>
+    <th>(Brecha)²</th>
+    <th style="width:30%;">vₖ × (Brecha)²</th>
+  </tr>`;
+
+  dists.forEach((d, k) => {
+    const barW = Math.min(100, (d.weighted / maxWeighted) * 100);
+    const gapColor = Math.abs(d.gap) < 2 ? '#4FC3A1' : Math.abs(d.gap) < 5 ? '#E8A317' : '#E85D4A';
+    html += `<tr class="pop-in" style="animation-delay:${k * 0.1}s;">
+      <td style="text-align:left; color:#8899AA;">${PREDICTORS[k].name}</td>
+      <td style="color:#1B6B93;">${(v[k]*100).toFixed(0)}%</td>
+      <td style="color:#E2E8F0;">${d.treated.toFixed(1)}</td>
+      <td style="color:#E8A317;">${d.synth.toFixed(1)}</td>
+      <td style="color:${gapColor};">${d.gap >= 0 ? '+' : ''}${d.gap.toFixed(1)}</td>
+      <td style="color:#6B7D95;">${d.gapSq.toFixed(1)}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div class="gap-bar-container">
+            <div class="gap-bar bar-anim" style="width:${barW}%;background:${gapColor};"></div>
+          </div>
+          <span style="color:${gapColor};font-size:12px;min-width:36px;text-align:right;">${d.weighted.toFixed(1)}</span>
+        </div>
+      </td>
+    </tr>`;
+  });
+
+  html += `<tr class="dist-total-row pop-in" style="animation-delay:0.5s;">
+    <td colspan="6" style="text-align:right; color:#F0F4F8; font-size:14px;">Distancia total =</td>
+    <td style="color:#4FC3A1; font-size:16px; font-weight:700;">${totalWeighted.toFixed(1)}</td>
+  </tr>`;
+
+  document.getElementById('distTable').innerHTML = html;
+  document.getElementById('distFormula').innerHTML =
+    '<span style="color:#E2E8F0;">min</span><sub style="color:#E8A317;">W</sub> ' +
+    '<span style="color:#6B7D95;">Σₖ</span> ' +
+    '<span style="color:#1B6B93;">vₖ</span>' +
+    '<span style="color:#6B7D95;"> × (</span>' +
+    '<span style="color:#E2E8F0;">X₁ₖ</span>' +
+    '<span style="color:#6B7D95;"> − Σⱼ </span>' +
+    '<span style="color:#E8A317;">wⱼ</span>' +
+    '<span style="color:#6B7D95;">Xⱼₖ)²</span>' +
+    '<span style="color:#4A5568; margin-left:12px;">sujeto a: wⱼ ≥ 0, Σ wⱼ = 1</span>';
+}
+
+function render() {
+  const cur = ITERS[Math.min(iteration, ITERS.length - 1)];
+  const prev = iteration > 0 ? ITERS[iteration - 1] : null;
+  const syn = SYN_PATHS[Math.min(iteration, SYN_PATHS.length - 1)];
+  const activeOuter = step >= 1 && step <= 5;
+  const activeInner = step >= 2 && step <= 3;
+
+  // Show/hide distance panel vs chart panel
+  const distPanel = document.getElementById('panelDist');
+  const chartPanel = document.getElementById('panelChart');
+  if (step === 2) {
+    distPanel.style.display = 'flex';
+    chartPanel.style.display = 'none';
+    renderDistTable(cur.v, cur.w);
+  } else {
+    distPanel.style.display = 'none';
+    chartPanel.style.display = 'flex';
+  }
+
+  // Iteration label
+  const il = document.getElementById('iterLabel');
+  if (iteration > 0 && step >= 2 && step <= 5) { il.style.display = 'inline'; il.textContent = `Iteración ${iteration + 1} de ${ITERS.length}`; }
+  else { il.style.display = 'none'; }
+
+  // Dots
+  const dr = document.getElementById('dotsRow');
+  dr.innerHTML = '';
+  STEPS.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'step-dot' + (i === step ? ' active' : i < step ? ' done' : '');
+    d.onclick = () => { step = i; if (i <= 1) iteration = 0; render(); };
+    dr.appendChild(d);
+    if (i < STEPS.length - 1) { const sep = document.createElement('div'); sep.className = 'dot-sep'; sep.style.background = i < step ? '#1B6B93' : '#1A2744'; dr.appendChild(sep); }
+  });
+
+  // Text
+  document.getElementById('stepTitle').textContent = STEPS[step].title;
+  document.getElementById('stepDesc').textContent = STEPS[step].desc;
+  document.getElementById('stepDetail').textContent = STEPS[step].detail;
+  const tp = document.getElementById('textPanel');
+  tp.className = 'fade-in';
+  void tp.offsetWidth;
+  tp.className = 'fade-in';
+
+  // Buttons
+  document.getElementById('btnPrev').disabled = step === 0;
+  const nb = document.getElementById('btnNext');
+  nb.disabled = step === 5 && iteration >= ITERS.length - 1;
+  nb.textContent = (step === 4 && iteration < ITERS.length - 1) ? 'Siguiente iteración →' : 'Siguiente →';
+
+  // Panel V
+  const pv = document.getElementById('panelV');
+  pv.style.border = `1.5px ${activeOuter ? 'solid' : 'dashed'} ${activeOuter ? '#1B6B93' : '#1A2744'}`;
+  pv.classList.toggle('dim', step === 0);
+  document.getElementById('pulseV').style.display = (step === 1 || step === 4) ? 'inline' : 'none';
+  const vb = document.getElementById('vBars'); vb.innerHTML = '';
+  PREDICTORS.forEach((p, i) => {
+    const val = cur.v[i]; const pval = prev ? prev.v[i] : val;
+    const changed = step === 4 && prev && Math.abs(val - pval) > 0.01;
+    const row = document.createElement('div'); row.className = 'bar-row'; row.style.marginBottom = '10px';
+    row.innerHTML = `<span class="mono" style="font-size:14px;width:36px;color:#6B7D95;text-align:right;">${p.short}</span>
+      <div class="bar-track"><div class="bar-fill ${step >= 1 ? 'bar-anim' : ''}" style="width:${val*100*2.3}%;background:${changed ? '#4FC3A1' : '#1B6B93'};"></div></div>
+      <span class="mono" style="font-size:14px;width:40px;color:${changed ? '#4FC3A1' : '#6B7D95'};">${step === 0 ? '—' : (val*100).toFixed(0)+'%'}</span>`;
+    vb.appendChild(row);
+  });
+
+  // Panel W
+  const pw = document.getElementById('panelW');
+  pw.style.border = `1.5px ${activeInner ? 'solid' : 'dashed'} ${activeInner ? '#E8A317' : '#1A2744'}`;
+  pw.classList.toggle('dim', step <= 1);
+  document.getElementById('pulseW').style.display = step === 2 ? 'inline' : 'none';
+  const wb = document.getElementById('wBars'); wb.innerHTML = '';
+  REGIONS.forEach((r, i) => {
+    const val = cur.w[i];
+    const row = document.createElement('div'); row.className = 'bar-row'; row.style.marginBottom = '8px';
+    row.innerHTML = `<span class="mono" style="font-size:13px;width:68px;color:#6B7D95;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.name}</span>
+      <div class="bar-track sm"><div class="bar-fill ${step >= 2 ? 'bar-anim' : ''}" style="width:${val*100*1.1}%;background:${val > 0.1 ? r.color : '#3A4A5F'};"></div></div>
+      <span class="mono" style="font-size:14px;width:40px;color:${val > 0.1 ? r.color : '#4A5568'};">${step <= 1 ? '—' : val === 0 ? '0%' : (val*100).toFixed(0)+'%'}</span>`;
+    wb.appendChild(row);
+  });
+
+  // Chart
+  const pc = document.getElementById('panelChart');
+  pc.style.border = `1.5px ${step === 3 ? 'solid' : 'dashed'} ${step === 3 ? '#4FC3A1' : '#1A2744'}`;
+  pc.classList.toggle('dim', step <= 2 && step !== 0);
+  document.getElementById('pulseChart').style.display = step === 3 ? 'inline' : 'none';
+  const svg = document.getElementById('chartSvg');
+  let svgHTML = '';
+  for (let i = 0; i < 5; i++) svgHTML += `<line x1="45" y1="${15+i*35}" x2="385" y2="${15+i*35}" stroke="#1A2744" stroke-width="0.5"/>`;
+  const tx = 45 + TRT_IDX * (340/9);
+  svgHTML += `<line x1="${tx}" y1="10" x2="${tx}" y2="160" stroke="#E8A317" stroke-width="1" stroke-dasharray="4 3" opacity="0.4"/>`;
+  svgHTML += `<text x="${tx}" y="175" fill="#E8A317" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" opacity="0.6">inicio</text>`;
+  [4,5,6,7,8].forEach((v,i) => { svgHTML += `<text x="38" y="${155-i*35+4}" fill="#4A5568" font-size="11" text-anchor="end" font-family="JetBrains Mono, monospace">${v}</text>`; });
+  const bPts = BASQUE_GDP.map((v,i) => `${45+i*(340/9)},${155-(v-4)*35}`).join(' ');
+  svgHTML += `<polyline points="${bPts}" fill="none" stroke="#F0F4F8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  if (step >= 3) {
+    const sPts = syn.map((v,i) => `${45+i*(340/9)},${155-(v-4)*35}`).join(' ');
+    svgHTML += `<polyline points="${sPts}" fill="none" stroke="#E8A317" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1000" style="animation: traceIn 1.2s ease forwards;"/>`;
+  }
+  svgHTML += `<rect x="245" y="6" width="14" height="4" fill="#F0F4F8" rx="1"/><text x="264" y="11" fill="#8899AA" font-size="11" font-family="JetBrains Mono, monospace">País Vasco</text>`;
+  if (step >= 3) svgHTML += `<rect x="245" y="18" width="14" height="4" fill="#E8A317" rx="1"/><text x="264" y="23" fill="#8899AA" font-size="11" font-family="JetBrains Mono, monospace">Sintético</text>`;
+  svg.innerHTML = svgHTML;
+
+  // MSPE
+  const pm = document.getElementById('panelMSPE');
+  pm.classList.toggle('dim', step <= 2);
+  const mb = document.getElementById('mspeBars'); mb.innerHTML = '';
+  const maxM = ITERS[0].mspe;
+  ITERS.forEach((d, i) => {
+    const show = i <= iteration && step >= 3;
+    const isCur = i === iteration;
+    const row = document.createElement('div'); row.className = 'bar-row'; row.style.opacity = show ? '1' : '0.2'; row.style.transition = 'opacity 0.4s';
+    row.innerHTML = `<span class="mono" style="font-size:13px;width:16px;color:#4A5568;">${i+1}</span>
+      <div class="bar-track xs">${show ? `<div class="bar-fill bar-anim" style="width:${(d.mspe/maxM)*100}%;background:${isCur ? '#4FC3A1' : '#1B6B93'};"></div>` : ''}</div>
+      <span class="mono" style="font-size:13px;width:40px;color:${isCur && show ? '#4FC3A1' : '#4A5568'};text-align:right;">${show ? d.mspe : ''}</span>`;
+    mb.appendChild(row);
+  });
+  const ms = document.getElementById('mspeStatus');
+  if (step >= 3) { ms.style.display = 'block'; document.getElementById('mspeText').textContent = (step === 5 || iteration >= ITERS.length - 1) ? 'Convergió ✓' : 'Mejorando...'; }
+  else { ms.style.display = 'none'; }
+}
+
+function goNext() {
+  if (step >= 1 && step <= 4 && step === 4 && iteration < ITERS.length - 1) { iteration++; step = 2; }
+  else if (step < STEPS.length - 1) { step++; }
+  render();
+}
+function goPrev() { if (step > 0) step--; if (step <= 1) iteration = 0; render(); }
+function reset() { step = 0; iteration = 0; render(); }
+
+// Expose for puppeteer
+window.setState = function(s, it) { step = s; iteration = it; render(); };
+window.goNext = goNext;
+
+render();
+</script>
+</body>
+</html>
